@@ -476,3 +476,112 @@ func isZero(v reflect.Value) bool {
 func FutureLineWrap() {
 	disableLineWrapping = true
 }
+
+var Separator = "/"
+var NameAttr = "name"
+
+func node_match(line int, col int, node *node) bool {
+	//fmt.Printf("line: %d=%d,  col : %d <= %d < %d, token=%s\n", node.line, line, node.column, col, node.column+len(node.value), node.value)
+	if (node.line == line) && (node.column <= col) && (node.column+len(node.value) > col) {
+		// fmt.Printf("match on %s!!\n", node.value)
+		return true
+	}
+	return false
+}
+
+func get_node_name(node *node) string {
+	if node.kind != 2 {
+		return ""
+	}
+
+	for i := 0; i < len(node.children); i += 2 {
+		keyNode := node.children[i]
+		valNode := node.children[i+1]
+		if keyNode.value != NameAttr {
+			continue
+		}
+		if valNode.kind != 8 {
+			return ""
+		}
+		return valNode.value
+	}
+
+	return ""
+}
+
+func findTokenAtPoint(line int, col int, node *node) (addr string, match bool) {
+	if node.kind == 1 {
+		// root node
+		for _, child := range node.children {
+			a, m := findTokenAtPoint(line, col, child)
+			if m == true {
+				// fmt.Printf("return (%s,%t)\n", "(doc)."+a, true)
+				return Separator + a, true
+			}
+		}
+	} else if node.kind == 2 {
+		// map node
+		for i := 0; i < len(node.children); i += 2 {
+			keyNode := node.children[i]
+			if node_match(line, col, keyNode) {
+				// fmt.Printf("return (%s,%t)\n", keyNode.value, true)
+				return keyNode.value, true
+			}
+			valNode := node.children[i+1]
+			a, m := findTokenAtPoint(line, col, valNode)
+			if m == true {
+				if a == "" {
+					// fmt.Printf("return (%s,%t)\n", keyNode.value, true)
+					return keyNode.value, true
+				} else {
+					// fmt.Printf("return (%s,%t)\n", keyNode.value+"."+a, true)
+					return keyNode.value + Separator + a, true
+				}
+			}
+		}
+	} else if node.kind == 4 {
+		// array node
+		for idx, child := range node.children {
+			a, m := findTokenAtPoint(line, col, child)
+			if m == true {
+				name := get_node_name(child)
+				if name != "" {
+					// fmt.Printf("return (%s,%t)\n", fmt.Sprintf("[name=%s].%s", name, a), true)
+					return fmt.Sprintf("%s=%s%s%s", NameAttr, name, Separator, a), true
+				}
+				// fmt.Printf("return (%s,%t)\n", fmt.Sprintf("[%d].%s", idx, a), true)
+				return fmt.Sprintf("%d%s%s", idx, Separator, a), true
+			}
+		}
+	} else if node.kind == 8 {
+		// fmt.Printf("%s = %s\n", path, node.value)
+		if true == node_match(line, col, node) {
+			// fmt.Printf("return (%s,%t)\n", "", true)
+			return "", true
+		}
+	}
+
+	// fmt.Printf("return (%s,%t)\n", "", false)
+	return "", false
+}
+
+func Configure(sep string, nameAttr string) {
+	NameAttr = nameAttr
+	Separator = sep
+}
+
+func PathAtPoint(line int, col int, in []byte) (path string, err error) {
+	defer handleErr(&err)
+	p := newParser(in)
+	defer p.destroy()
+	node := p.parse()
+	if node != nil {
+		a, m := findTokenAtPoint(line, col, node)
+		if false == m {
+			return "", fmt.Errorf("token not found at %d:%d", line, col)
+		}
+		return a, nil
+	}
+
+	return "", nil
+}
